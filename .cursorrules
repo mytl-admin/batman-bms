@@ -1,0 +1,18 @@
+You are building the backend for a Booking Management Service ERP.
+
+Tech stack:
+- Node.js with Express
+- Supabase (PostgreSQL) as database
+- JWT authentication on every request
+- SendGrid for email
+- OpenAI for AI features
+
+Rules:
+- Never hardcode any value that belongs in an environment variable
+- Never expose HEAD method on any endpoint
+- All request bodies must be JSON
+- Every route requires JWT authentication except GET /health
+- Always use the LogService for critical business events — never log directly
+- Follow the schema exactly as defined in booking_service_requirements_v5.md
+- Build only what the current story asks for — nothing more
+- Reference @booking_service_requirements_v5.md and @phase1_stories.md for all decisions

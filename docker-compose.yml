@@ -1,0 +1,9 @@
+# Run API without installing Node on the host: docker compose up --build
+# Requires `.env.dev` (copy from `.env.example` and fill in).
+services:
+  api:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env.dev

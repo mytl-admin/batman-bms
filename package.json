@@ -1,0 +1,36 @@
+{
+  "name": "booking-erp-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Booking Management Service ERP — API",
+  "main": "src/index.js",
+  "scripts": {
+    "predev": "node scripts/ensure-node20.js",
+    "prestart": "node scripts/ensure-node20.js",
+    "pretest": "node scripts/ensure-node20.js",
+    "setup": "bash scripts/setup-new-machine.sh",
+    "dev": "node --env-file=.env.dev src/index.js",
+    "start": "node --env-file=.env.production src/index.js",
+    "test": "node --test --env-file=.env.test test/*.test.js",
+    "db:apply": "node --env-file=.env.dev scripts/apply-migrations.js",
+    "db:probe": "node --env-file=.env.dev scripts/probe-supabase.js",
+    "user:upsert": "node --env-file=.env.dev scripts/upsert-login-user.js",
+    "test:phase1": "node --env-file=.env.dev scripts/run-phase1-harness.js",
+    "test:phase1:html": "PHASE1_HARNESS_PORT=3049 node --env-file=.env.dev scripts/phase1-v2-html-report.js",
+    "test:phase2:html": "PHASE2_HARNESS_PORT=3050 node --env-file=.env.dev scripts/phase2-backend-html-report.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
+    "@supabase/supabase-js": "^2.49.10",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
+    "pg": "^8.13.1",
+    "ws": "^8.18.0"
+  }
+}
