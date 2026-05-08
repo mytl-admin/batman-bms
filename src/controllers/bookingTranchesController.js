@@ -50,7 +50,7 @@ async function createSupplier(req, res) {
       supplier_id: body.supplier_id || null,
       amount: amt,
       currency: body.currency || 'INR',
-      exchange_rate: ex,
+      exchange_rate_decimal: ex,
       inr_equivalent: inr,
       payment_date: String(body.payment_date).slice(0, 10),
       status: 'pending',
@@ -111,7 +111,7 @@ async function patchSupplier(req, res) {
       patch.currency = String(body.currency);
     }
     if (body.exchange_rate != null) {
-      patch.exchange_rate = Number(body.exchange_rate);
+      patch.exchange_rate_decimal = Number(body.exchange_rate);
     }
     if (body.payment_date != null) {
       patch.payment_date = String(body.payment_date).slice(0, 10);
@@ -125,8 +125,9 @@ async function patchSupplier(req, res) {
     }
 
     const merged = { ...existing, ...patch };
-    if (merged.amount != null && merged.exchange_rate != null) {
-      patch.inr_equivalent = ceilRupee(Number(merged.amount) * Number(merged.exchange_rate));
+    const mergedExchangeRate = merged.exchange_rate_decimal ?? merged.exchange_rate;
+    if (merged.amount != null && mergedExchangeRate != null) {
+      patch.inr_equivalent = ceilRupee(Number(merged.amount) * Number(mergedExchangeRate));
     }
     patch.updated_at = new Date().toISOString();
 

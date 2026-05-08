@@ -15,6 +15,9 @@ router.post('/gst-rate', requireRole('admin'), config.postGst);
 router.get('/fx-threshold/current', config.getFxCurrent);
 router.post('/fx-threshold', requireRole('admin'), config.postFx);
 
+router.get('/default-margin-pct/current', config.getDefaultMarginCurrent);
+router.post('/default-margin-pct', requireRole('admin'), config.postDefaultMargin);
+
 router.get('/:config', config.listConfig);
 router.get('/:config/:id', config.getConfigOne);
 router.post('/:config', requireRole('admin'), config.createConfig);

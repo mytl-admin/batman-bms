@@ -39,6 +39,13 @@ function ourRefundDates(isRefundable, supplierFull, supplierPartial) {
   return { ourFull, ourPartial };
 }
 
+function normalizeTransferType(v) {
+  if (v == null || String(v).trim() === '') return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === 'shared') return 'sic';
+  return s;
+}
+
 function assertPayBeforeTravel(paymentDateStr, dateOfTravelStr) {
   const pay = String(paymentDateStr).slice(0, 10);
   const dot = String(dateOfTravelStr).slice(0, 10);
@@ -397,7 +404,7 @@ async function createBookingFromPayload(body, user, logService) {
         await client.query(
           `INSERT INTO booking_flights (
           booking_id, is_self_booked, sector_from, sector_to, supplier_id, travel_date, departure_time,
-          cabin_class, baggage_allowance, cost, currency, exchange_rate, inr_equivalent,
+          cabin_class, baggage_allowance, cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
           partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, fare_rules, sort_order
         ) VALUES (
@@ -417,7 +424,7 @@ async function createBookingFromPayload(body, user, logService) {
         await client.query(
           `INSERT INTO booking_flights (
           booking_id, is_self_booked, sector_from, sector_to, supplier_id, travel_date, departure_time,
-          cabin_class, baggage_allowance, cost, currency, exchange_rate, inr_equivalent,
+          cabin_class, baggage_allowance, cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
           partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order
         ) VALUES (
@@ -476,7 +483,7 @@ async function createBookingFromPayload(body, user, logService) {
           `INSERT INTO booking_hotels (
           booking_id, is_self_booked, property_name, supplier_id, city,
           check_in_date, check_out_date, nights, room_type, meal_plan,
-          cost, currency, exchange_rate, inr_equivalent,
+          cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
           partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, fare_rules, sort_order
         ) VALUES (
@@ -498,7 +505,7 @@ async function createBookingFromPayload(body, user, logService) {
           `INSERT INTO booking_hotels (
           booking_id, is_self_booked, property_name, supplier_id, city,
           check_in_date, check_out_date, nights, room_type, meal_plan,
-          cost, currency, exchange_rate, inr_equivalent,
+          cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
           partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order
         ) VALUES (
@@ -529,7 +536,7 @@ async function createBookingFromPayload(body, user, logService) {
       await client.query(
         `INSERT INTO booking_land_items (
           booking_id, sub_item_type, description, supplier_id, transfer_type, date,
-          cost, currency, exchange_rate, inr_equivalent,
+          cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
           partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order
         ) VALUES (
@@ -542,7 +549,7 @@ async function createBookingFromPayload(body, user, logService) {
           l.sub_item_type,
           String(l.description).trim(),
           l.supplier_id || null,
-          l.transfer_type != null ? String(l.transfer_type) : null,
+          normalizeTransferType(l.transfer_type),
           l.date != null ? String(l.date).slice(0, 10) : null,
           cost,
           l.currency,
@@ -580,7 +587,7 @@ async function createBookingFromPayload(body, user, logService) {
         `INSERT INTO booking_visas (
           booking_id, is_self_arranged, country, visa_type, supplier_id,
           cost_per_applicant, number_of_applicants, total_cost,
-          currency, exchange_rate, inr_equivalent,
+          currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till, sort_order
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'INR'), COALESCE($10, 1), $11,
@@ -625,7 +632,7 @@ async function createBookingFromPayload(body, user, logService) {
       const inr = ceilRupee(amt * ex);
       await client.query(
         `INSERT INTO supplier_tranches (
-          booking_id, supplier_id, amount, currency, exchange_rate, inr_equivalent, payment_date, status
+          booking_id, supplier_id, amount, currency, exchange_rate_decimal, inr_equivalent, payment_date, status
         ) VALUES ($1, $2, $3, COALESCE($4, 'INR'), COALESCE($5, 1), $6, $7::date, 'pending')`,
         [
           bookingId,

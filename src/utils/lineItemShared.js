@@ -17,6 +17,12 @@ function normalizeTime(t) {
   return s;
 }
 
+function readExchangeRate(body) {
+  if (body?.exchange_rate_decimal != null) return Number(body.exchange_rate_decimal);
+  if (body?.exchange_rate != null) return Number(body.exchange_rate);
+  return 1;
+}
+
 /** Strip client-submitted our_* refund dates (P2-16). */
 function omitOurRefundFields(body) {
   if (!body || typeof body !== 'object') {
@@ -30,7 +36,7 @@ function flightDerived(body) {
   omitOurRefundFields(body);
   const self = Boolean(body.is_self_booked);
   const cost = body.cost != null ? Number(body.cost) : null;
-  const ex = body.exchange_rate != null ? Number(body.exchange_rate) : 1;
+  const ex = readExchangeRate(body);
   const inr = self ? null : ceilRupee((cost || 0) * ex);
   const ref = Boolean(body.is_refundable);
   const supFull = body.supplier_full_refund_till;
@@ -46,7 +52,7 @@ function hotelDerived(body) {
   omitOurRefundFields(body);
   const self = Boolean(body.is_self_booked);
   const cost = body.cost != null ? Number(body.cost) : null;
-  const ex = body.exchange_rate != null ? Number(body.exchange_rate) : 1;
+  const ex = readExchangeRate(body);
   const inr = self ? null : ceilRupee((cost || 0) * ex);
   const ref = Boolean(body.is_refundable);
   const supFull = body.supplier_full_refund_till;
@@ -66,7 +72,7 @@ function hotelDerived(body) {
 function landDerived(body) {
   omitOurRefundFields(body);
   const cost = body.cost != null ? Number(body.cost) : 0;
-  const ex = body.exchange_rate != null ? Number(body.exchange_rate) : 1;
+  const ex = readExchangeRate(body);
   const inr = ceilRupee(cost * ex);
   const ref = Boolean(body.is_refundable);
   const supFull = body.supplier_full_refund_till;
@@ -84,7 +90,7 @@ function visaDerived(body) {
   const cpp = body.cost_per_applicant != null ? Number(body.cost_per_applicant) : 0;
   const n = body.number_of_applicants != null ? Number(body.number_of_applicants) : 0;
   const total = ceilRupee(cpp * n);
-  const ex = body.exchange_rate != null ? Number(body.exchange_rate) : 1;
+  const ex = readExchangeRate(body);
   const inr = selfArr ? null : ceilRupee(total * ex);
   let ourFull = null;
   if (!selfArr && body.is_refundable && body.supplier_full_refund_till) {
@@ -118,7 +124,7 @@ async function refreshVisaApplicantTotals(supabase, visaId) {
   const n = count || 0;
   const cpp = Number(visa.cost_per_applicant || 0);
   const total = ceilRupee(cpp * n);
-  const ex = Number(visa.exchange_rate || 1);
+  const ex = readExchangeRate(visa);
   const inr = visa.is_self_arranged ? null : ceilRupee(total * ex);
   await supabase
     .from('booking_visas')

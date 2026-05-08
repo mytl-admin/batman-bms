@@ -21,6 +21,13 @@ const LAND_KEYS = [
   'sort_order',
 ];
 
+function normalizeTransferType(v) {
+  if (v == null || String(v).trim() === '') return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === 'shared') return 'sic';
+  return s;
+}
+
 function pickLand(body) {
   const o = {};
   for (const k of LAND_KEYS) {
@@ -63,11 +70,11 @@ async function create(req, res) {
     sub_item_type: body.sub_item_type,
     description: String(body.description).trim(),
     supplier_id: body.supplier_id || null,
-    transfer_type: body.transfer_type || null,
+    transfer_type: normalizeTransferType(body.transfer_type),
     date: body.date != null ? String(body.date).slice(0, 10) : null,
     cost: body.cost != null ? Number(body.cost) : 0,
     currency: body.currency ?? 'INR',
-    exchange_rate: body.exchange_rate != null ? Number(body.exchange_rate) : 1,
+    exchange_rate_decimal: body.exchange_rate != null ? Number(body.exchange_rate) : 1,
     is_refundable: Boolean(body.is_refundable),
     supplier_full_refund_till: body.supplier_full_refund_till != null ? String(body.supplier_full_refund_till).slice(0, 10) : null,
     partial_refund_pct: body.partial_refund_pct != null ? Number(body.partial_refund_pct) : null,
@@ -119,6 +126,9 @@ async function patch(req, res) {
     ...derived,
     updated_at: new Date().toISOString(),
   };
+  if (patch.transfer_type !== undefined) {
+    patch.transfer_type = normalizeTransferType(patch.transfer_type);
+  }
   for (const k of Object.keys(patch)) {
     if (patch[k] === undefined) {
       delete patch[k];

@@ -191,6 +191,13 @@ async function waitForServer() {
   throw new Error(`API not reachable at ${BASE}`);
 }
 
+/** Child must not inherit parent DATABASE_URL — it overrides --env-file=.env.dev (pooler vs direct db). */
+function childEnvForSpawn(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.DATABASE_URL;
+  return env;
+}
+
 async function ensureServer() {
   if (process.env.SKIP_SERVER_SPAWN === '1') {
     await waitForServer();
@@ -200,7 +207,7 @@ async function ensureServer() {
     serverChild = cp.spawn('node', ['--env-file=.env.dev', path.join(repoRoot, 'src/index.js')], {
       cwd: repoRoot,
       stdio: 'ignore',
-      env: { ...process.env, PORT: String(apiPort) },
+      env: childEnvForSpawn({ PORT: String(apiPort) }),
     });
     await waitForServer();
     return;
@@ -214,7 +221,7 @@ async function ensureServer() {
   serverChild = cp.spawn('node', ['--env-file=.env.dev', path.join(repoRoot, 'src/index.js')], {
     cwd: repoRoot,
     stdio: 'ignore',
-    env: { ...process.env },
+    env: childEnvForSpawn(),
   });
   await waitForServer();
 }
@@ -937,6 +944,73 @@ async function runSuite(sb) {
     '',
     t27 ? null : !t27b ? x.exchange : xTcsUp.exchange,
   );
+
+  const probeDm = await req('GET', '/api/config/default-margin-pct/current', { headers: gh() });
+  if (probeDm.status !== 200) {
+    r(
+      'G6 P2-PAYMENT',
+      'T51',
+      'Default margin pct API (skipped — DB missing config_default_margin_pct)',
+      true,
+      'apply migration 010',
+      String(probeDm.status),
+      'Run supabase/migrations/010_config_default_margin_pct.sql on the project DB, then reload PostgREST schema if needed.',
+      null,
+    );
+  } else {
+    x = probeDm;
+    const t51a = x.status === 200 && Number.isFinite(Number(x.json.rate));
+    r(
+      'G6 P2-PAYMENT',
+      'T51a',
+      'GET default-margin-pct/current (agent)',
+      t51a,
+      '200 + numeric rate',
+      `${x.status} ${JSON.stringify(x.json)}`,
+      '',
+      httpOnFail(t51a, x),
+    );
+    const xDmUp = await req('POST', '/api/config/default-margin-pct', {
+      headers: ah(),
+      body: { rate: 0.11 },
+    });
+    const t51b = xDmUp.status === 201;
+    r(
+      'G6 P2-PAYMENT',
+      'T51b',
+      'POST default-margin-pct (admin)',
+      t51b,
+      '201',
+      String(xDmUp.status),
+      '',
+      httpOnFail(t51b, xDmUp),
+    );
+    x = await req('GET', '/api/config/default-margin-pct/current', { headers: gh() });
+    const t51c = x.status === 200 && Math.abs(Number(x.json.rate) - 0.11) < 0.0001;
+    r(
+      'G6 P2-PAYMENT',
+      'T51c',
+      'Default margin rate after admin update',
+      t51c,
+      '0.11',
+      String(x.json?.rate),
+      '',
+      httpOnFail(t51c, x),
+    );
+    await req('POST', '/api/config/default-margin-pct', { headers: ah(), body: { rate: 0.12 } });
+    x = await req('GET', '/api/config/default-margin-pct/current', { headers: gh() });
+    const t51d = x.status === 200 && Math.abs(Number(x.json.rate) - 0.12) < 0.0001;
+    r(
+      'G6 P2-PAYMENT',
+      'T51d',
+      'Default margin restored to 0.12',
+      t51d,
+      '0.12',
+      String(x.json?.rate),
+      '',
+      httpOnFail(t51d, x),
+    );
+  }
 
   x = await req('POST', `/api/bookings/${TEST_BOOKING_ID}/flights`, {
     headers: ah(),

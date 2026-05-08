@@ -17,7 +17,7 @@
     "user:upsert": "node --env-file=.env.dev scripts/upsert-login-user.js",
     "test:phase1": "node --env-file=.env.dev scripts/run-phase1-harness.js",
     "test:phase1:html": "PHASE1_HARNESS_PORT=3049 node --env-file=.env.dev scripts/phase1-v2-html-report.js",
-    "test:phase2:html": "PHASE2_HARNESS_PORT=3050 node --env-file=.env.dev scripts/phase2-backend-html-report.js"
+    "test:phase2:html": "env -u DATABASE_URL PHASE2_HARNESS_PORT=3050 node --env-file=.env.dev scripts/phase2-backend-html-report.js"
   },
   "engines": {
     "node": ">=20"

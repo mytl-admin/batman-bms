@@ -219,7 +219,9 @@ async function list(req, res) {
 async function getById(req, res) {
   const { id } = req.params;
   const supabase = getSupabase();
-  const { data: row, error } = await supabase.from('bookings').select(DETAIL_SELECT).eq('id', id).maybeSingle();
+  let query = supabase.from('bookings').select(DETAIL_SELECT);
+  query = UUID_RE.test(String(id)) ? query.eq('id', id) : query.eq('booking_code', id);
+  const { data: row, error } = await query.maybeSingle();
 
   if (error) {
     console.error(error);
@@ -260,8 +262,8 @@ async function create(req, res) {
     if (e.code === '23503') {
       return res.status(400).json({ error: 'Invalid supplier or reference' });
     }
-    console.error('POST /api/bookings failed:', e?.message || e);
-    if (e?.stack) console.error(e.stack);
+    console.error('Booking creation error:', e?.message);
+    console.error('Stack:', e?.stack);
     return res.status(500).json({ error: 'Failed to create booking' });
   }
 }

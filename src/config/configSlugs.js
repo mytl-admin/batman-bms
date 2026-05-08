@@ -14,7 +14,13 @@ const CONFIG_SLUG_TO_TABLE = {
   'email-templates': 'config_email_templates',
 };
 
-const RESERVED_CONFIG_SLUGS = new Set(['all', 'tcs-rate', 'gst-rate', 'fx-threshold']);
+const RESERVED_CONFIG_SLUGS = new Set([
+  'all',
+  'tcs-rate',
+  'gst-rate',
+  'fx-threshold',
+  'default-margin-pct',
+]);
 
 /** Tables that include email template fields */
 const EMAIL_TEMPLATE_SLUG = 'email-templates';

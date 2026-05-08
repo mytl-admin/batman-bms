@@ -208,6 +208,14 @@ CREATE TABLE config_fx_risk_threshold (
   created_at    TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE config_default_margin_pct (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rate          NUMERIC(5,4) NOT NULL DEFAULT 0.12,
+  is_active     BOOLEAN DEFAULT true,
+  created_by    UUID REFERENCES users(id),
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE config_email_templates (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name            VARCHAR NOT NULL,
@@ -260,6 +268,8 @@ INSERT INTO config_refund_methods (name, code, sort_order, used_in_pages, used_i
 INSERT INTO config_tcs_rate (rate, effective_from) VALUES (0.02, '2024-01-01');
 INSERT INTO config_gst_rate (rate, effective_from) VALUES (0.18, '2024-01-01');
 INSERT INTO config_fx_risk_threshold (threshold_pct) VALUES (0.05);
+INSERT INTO config_default_margin_pct (rate)
+SELECT 0.12 WHERE NOT EXISTS (SELECT 1 FROM config_default_margin_pct LIMIT 1);
 -- P1-13 system_logs (before core indexes that reference it)
 
 CREATE TABLE system_logs (
@@ -692,3 +702,28 @@ ALTER TABLE booking_travellers ALTER COLUMN emergency_contact_phone DROP NOT NUL
 -- Private storage: persistence uses file_path; signed URLs generated on read only
 ALTER TABLE booking_documents ADD COLUMN IF NOT EXISTS file_path VARCHAR;
 ALTER TABLE booking_documents ALTER COLUMN file_url DROP NOT NULL;
+
+-- Strict decimal exchange rate rollout
+ALTER TABLE booking_flights ADD COLUMN IF NOT EXISTS exchange_rate_decimal NUMERIC(10,4);
+ALTER TABLE booking_hotels ADD COLUMN IF NOT EXISTS exchange_rate_decimal NUMERIC(10,4);
+ALTER TABLE booking_land_items ADD COLUMN IF NOT EXISTS exchange_rate_decimal NUMERIC(10,4);
+ALTER TABLE booking_visas ADD COLUMN IF NOT EXISTS exchange_rate_decimal NUMERIC(10,4);
+ALTER TABLE supplier_tranches ADD COLUMN IF NOT EXISTS exchange_rate_decimal NUMERIC(10,4);
+
+UPDATE booking_flights SET exchange_rate_decimal = COALESCE(exchange_rate_decimal, exchange_rate, 1);
+UPDATE booking_hotels SET exchange_rate_decimal = COALESCE(exchange_rate_decimal, exchange_rate, 1);
+UPDATE booking_land_items SET exchange_rate_decimal = COALESCE(exchange_rate_decimal, exchange_rate, 1);
+UPDATE booking_visas SET exchange_rate_decimal = COALESCE(exchange_rate_decimal, exchange_rate, 1);
+UPDATE supplier_tranches SET exchange_rate_decimal = COALESCE(exchange_rate_decimal, exchange_rate, 1);
+
+ALTER TABLE booking_flights ALTER COLUMN exchange_rate_decimal SET DEFAULT 1;
+ALTER TABLE booking_hotels ALTER COLUMN exchange_rate_decimal SET DEFAULT 1;
+ALTER TABLE booking_land_items ALTER COLUMN exchange_rate_decimal SET DEFAULT 1;
+ALTER TABLE booking_visas ALTER COLUMN exchange_rate_decimal SET DEFAULT 1;
+ALTER TABLE supplier_tranches ALTER COLUMN exchange_rate_decimal SET DEFAULT 1;
+
+ALTER TABLE booking_flights ALTER COLUMN exchange_rate_decimal SET NOT NULL;
+ALTER TABLE booking_hotels ALTER COLUMN exchange_rate_decimal SET NOT NULL;
+ALTER TABLE booking_land_items ALTER COLUMN exchange_rate_decimal SET NOT NULL;
+ALTER TABLE booking_visas ALTER COLUMN exchange_rate_decimal SET NOT NULL;
+ALTER TABLE supplier_tranches ALTER COLUMN exchange_rate_decimal SET NOT NULL;

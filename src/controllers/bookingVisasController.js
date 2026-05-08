@@ -72,7 +72,7 @@ async function create(req, res) {
     number_of_applicants: 0,
     total_cost: 0,
     currency: body.currency ?? 'INR',
-    exchange_rate: body.exchange_rate != null ? Number(body.exchange_rate) : 1,
+    exchange_rate_decimal: body.exchange_rate != null ? Number(body.exchange_rate) : 1,
     is_refundable: Boolean(body.is_refundable),
     supplier_full_refund_till: body.supplier_full_refund_till != null ? String(body.supplier_full_refund_till).slice(0, 10) : null,
     our_full_refund_till: derived.our_full_refund_till,

@@ -318,6 +318,75 @@ async function postFx(req, res) {
   return res.status(201).json(r.data);
 }
 
+/** Stored as decimal (0.12); tolerate legacy rows where rate was stored as percent (12). */
+function normalizeDefaultMarginRateDecimal(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  if (n > 1) return n / 100;
+  return n;
+}
+
+function toStoredDefaultMarginRate(input) {
+  const n = Number(input);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n > 1 ? n / 100 : n;
+}
+
+async function getDefaultMarginCurrent(req, res) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('config_default_margin_pct')
+    .select('rate')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Failed to load rate' });
+  }
+  if (!data) return res.status(404).json({ error: 'No active configuration' });
+  return res.json({ rate: normalizeDefaultMarginRateDecimal(data.rate) });
+}
+
+async function postDefaultMargin(req, res) {
+  const raw = (req.body || {}).rate;
+  if (raw === undefined || raw === null) {
+    return res.status(400).json({ error: 'rate is required' });
+  }
+  const rate = toStoredDefaultMarginRate(raw);
+  if (rate === null) {
+    return res.status(400).json({ error: 'rate must be a non-negative number' });
+  }
+
+  const supabase = getSupabase();
+  await supabase.from('config_default_margin_pct').update({ is_active: false }).eq('is_active', true);
+
+  const insert = {
+    rate,
+    is_active: true,
+    created_by: req.user.id,
+  };
+  const { data, error } = await supabase.from('config_default_margin_pct').insert(insert).select('*').single();
+  if (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Failed to save' });
+  }
+
+  await getLogService(req).log({
+    event_type: 'CONFIG_CREATED',
+    entity_type: 'config_default_margin_pct',
+    entity_id: data.id,
+    actor_id: req.user.id,
+    actor_role: req.user.role,
+    before_state: null,
+    after_state: data,
+    metadata: { slug: 'default-margin-pct' },
+  });
+
+  return res.status(201).json(data);
+}
+
 module.exports = {
   listConfig,
   getConfigOne,
@@ -330,4 +399,6 @@ module.exports = {
   postTcs,
   postGst,
   postFx,
+  getDefaultMarginCurrent,
+  postDefaultMargin,
 };
