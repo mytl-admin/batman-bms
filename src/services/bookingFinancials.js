@@ -33,19 +33,19 @@ async function recalculateBookingFinancials(client, bookingId) {
   const margin = Number(mRows[0]?.margin || 0);
 
   const { rows: flights } = await client.query(
-    'SELECT inr_equivalent, is_self_booked FROM booking_flights WHERE booking_id = $1',
+    'SELECT inr_equivalent, is_self_booked FROM booking_flights WHERE booking_id = $1 AND is_active = true',
     [bookingId],
   );
   const { rows: hotels } = await client.query(
-    'SELECT inr_equivalent, is_self_booked FROM booking_hotels WHERE booking_id = $1',
+    'SELECT inr_equivalent, is_self_booked FROM booking_hotels WHERE booking_id = $1 AND is_active = true',
     [bookingId],
   );
   const { rows: lands } = await client.query(
-    'SELECT inr_equivalent FROM booking_land_items WHERE booking_id = $1',
+    'SELECT inr_equivalent FROM booking_land_items WHERE booking_id = $1 AND is_active = true',
     [bookingId],
   );
   const { rows: visas } = await client.query(
-    'SELECT inr_equivalent, is_self_arranged FROM booking_visas WHERE booking_id = $1',
+    'SELECT inr_equivalent, is_self_arranged FROM booking_visas WHERE booking_id = $1 AND is_active = true',
     [bookingId],
   );
 

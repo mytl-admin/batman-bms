@@ -1,5 +1,5 @@
 const { getSupabase } = require('../lib/supabase');
-const { visaDerived, lineItemCount, refreshVisaApplicantTotals } = require('../utils/lineItemShared');
+const { visaDerived, lineItemCount, refreshVisaApplicantTotals, fetchBookingTotalCostPrice } = require('../utils/lineItemShared');
 
 function log(req) {
   return req.app.locals.logService;
@@ -35,6 +35,7 @@ async function list(req, res) {
     .from('booking_visas')
     .select('*')
     .eq('booking_id', bid)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true });
   if (error) {
     console.error(error);
@@ -61,7 +62,11 @@ async function create(req, res) {
   const bid = req.params.id;
   const body = pickVisa(req.body || {});
   const derived = visaDerived({ ...body, number_of_applicants: 0 });
-  const { count } = await supabase.from('booking_visas').select('*', { count: 'exact', head: true }).eq('booking_id', bid);
+  const { count } = await supabase
+    .from('booking_visas')
+    .select('*', { count: 'exact', head: true })
+    .eq('booking_id', bid)
+    .eq('is_active', true);
   const row = {
     booking_id: bid,
     is_self_arranged: Boolean(body.is_self_arranged),
@@ -78,6 +83,7 @@ async function create(req, res) {
     our_full_refund_till: derived.our_full_refund_till,
     inr_equivalent: derived.inr_equivalent,
     sort_order: body.sort_order != null ? Number(body.sort_order) : count || 0,
+    is_active: true,
   };
 
   const { data: created, error } = await supabase.from('booking_visas').insert(row).select('*').single();
@@ -111,7 +117,13 @@ async function patch(req, res) {
   const supabase = getSupabase();
   const bid = req.params.id;
   const vid = req.params.visaId;
-  const { data: existing, error: fe } = await supabase.from('booking_visas').select('*').eq('id', vid).eq('booking_id', bid).maybeSingle();
+  const { data: existing, error: fe } = await supabase
+    .from('booking_visas')
+    .select('*')
+    .eq('id', vid)
+    .eq('booking_id', bid)
+    .eq('is_active', true)
+    .maybeSingle();
   if (fe || !existing) {
     return res.status(404).json({ error: 'Not found' });
   }
@@ -167,26 +179,54 @@ async function remove(req, res) {
   if ((await lineItemCount(supabase, bid)) <= 1) {
     return res.status(400).json({ error: 'Cannot remove the only line item on the booking' });
   }
-  const { error } = await supabase.from('booking_visas').delete().eq('id', vid).eq('booking_id', bid);
+
+  let beforeTotalCostPrice;
+  try {
+    beforeTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+
+  const { data: deactivated, error } = await supabase
+    .from('booking_visas')
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq('id', vid)
+    .eq('booking_id', bid)
+    .eq('is_active', true)
+    .select('id');
   if (error) {
     console.error(error);
-    return res.status(500).json({ error: 'Failed to delete visa' });
+    return res.status(500).json({ error: 'Failed to deactivate visa' });
   }
+  if (!deactivated?.length) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
   try {
     const { runBookingRecalc } = require('../services/bookingRecalc');
     await runBookingRecalc(bid, { regenGuestTranches: true });
   } catch (e) {
     console.error(e);
   }
+
+  let afterTotalCostPrice;
+  try {
+    afterTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+  } catch (e) {
+    console.error(e);
+    afterTotalCostPrice = null;
+  }
+
   await log(req).log({
     event_type: 'BOOKING_UPDATED',
     entity_type: 'booking',
     entity_id: bid,
     actor_id: req.user.id,
     actor_role: req.user.role,
-    before_state: { visa_removed: vid },
-    after_state: null,
-    metadata: { section: 'visas' },
+    before_state: { total_cost_price: beforeTotalCostPrice },
+    after_state: { total_cost_price: afterTotalCostPrice },
+    metadata: { section: 'visas', deactivated_visa_id: vid },
   });
   return res.status(204).send();
 }
@@ -200,7 +240,13 @@ async function addApplicant(req, res) {
     return res.status(400).json({ error: 'traveller_id is required' });
   }
 
-  const { data: visa } = await supabase.from('booking_visas').select('id').eq('id', vid).eq('booking_id', bid).maybeSingle();
+  const { data: visa } = await supabase
+    .from('booking_visas')
+    .select('id')
+    .eq('id', vid)
+    .eq('booking_id', bid)
+    .eq('is_active', true)
+    .maybeSingle();
   if (!visa) {
     return res.status(404).json({ error: 'Visa not found' });
   }

@@ -32,11 +32,11 @@ async function replaceGuestTranchesForBooking(client, bookingId) {
 
   if (dtt > 20) {
     const { rows: flights } = await client.query(
-      'SELECT inr_equivalent, is_self_booked FROM booking_flights WHERE booking_id = $1',
+      'SELECT inr_equivalent, is_self_booked FROM booking_flights WHERE booking_id = $1 AND is_active = true',
       [bookingId],
     );
     const { rows: hotels } = await client.query(
-      'SELECT inr_equivalent, is_self_booked FROM booking_hotels WHERE booking_id = $1',
+      'SELECT inr_equivalent, is_self_booked FROM booking_hotels WHERE booking_id = $1 AND is_active = true',
       [bookingId],
     );
 

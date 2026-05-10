@@ -1,7 +1,7 @@
 const { getSupabase } = require('../lib/supabase');
 const { createDocumentVersion } = require('../services/documentService');
 const { enrichDocumentsWithSignedUrls } = require('../lib/documentsStorage');
-const { normalizeTime, flightDerived, lineItemCount } = require('../utils/lineItemShared');
+const { normalizeTime, flightDerived, lineItemCount, fetchBookingTotalCostPrice } = require('../utils/lineItemShared');
 const {
   supabaseErrorMessage,
   omitFareRules,
@@ -49,6 +49,7 @@ async function list(req, res) {
     .from('booking_flights')
     .select('*')
     .eq('booking_id', req.params.id)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true });
   if (error) {
     console.error(error);
@@ -63,7 +64,11 @@ async function create(req, res) {
     const bid = req.params.id;
     const body = pickFlight(req.body || {});
     const derived = flightDerived({ ...body });
-    const { count } = await supabase.from('booking_flights').select('*', { count: 'exact', head: true }).eq('booking_id', bid);
+    const { count } = await supabase
+      .from('booking_flights')
+      .select('*', { count: 'exact', head: true })
+      .eq('booking_id', bid)
+      .eq('is_active', true);
     /* fare_rules: column added in supabase/migrations/006_phase2_fare_rules.sql */
     const row = {
       booking_id: bid,
@@ -85,6 +90,7 @@ async function create(req, res) {
         body.supplier_partial_refund_till != null ? String(body.supplier_partial_refund_till).slice(0, 10) : null,
       fare_rules: body.fare_rules != null ? String(body.fare_rules) : null,
       sort_order: count ?? 0,
+      is_active: true,
       ...derived,
     };
 
@@ -124,7 +130,13 @@ async function patch(req, res) {
     const supabase = getSupabase();
     const bid = req.params.id;
     const fid = req.params.flightId;
-    const { data: existing, error: fe } = await supabase.from('booking_flights').select('*').eq('id', fid).eq('booking_id', bid).maybeSingle();
+    const { data: existing, error: fe } = await supabase
+      .from('booking_flights')
+      .select('*')
+      .eq('id', fid)
+      .eq('booking_id', bid)
+      .eq('is_active', true)
+      .maybeSingle();
     if (fe) {
       console.error(fe);
       return res.status(500).json({ error: supabaseErrorMessage(fe) });
@@ -196,10 +208,27 @@ async function remove(req, res) {
       return res.status(400).json({ error: 'Cannot remove the only line item on the booking' });
     }
 
-    const { error } = await supabase.from('booking_flights').delete().eq('id', fid).eq('booking_id', bid);
+    let beforeTotalCostPrice;
+    try {
+      beforeTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: supabaseErrorMessage(e) });
+    }
+
+    const { data: deactivated, error } = await supabase
+      .from('booking_flights')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', fid)
+      .eq('booking_id', bid)
+      .eq('is_active', true)
+      .select('id');
     if (error) {
       console.error(error);
       return res.status(500).json({ error: supabaseErrorMessage(error) });
+    }
+    if (!deactivated?.length) {
+      return res.status(404).json({ error: 'Not found' });
     }
 
     try {
@@ -209,15 +238,23 @@ async function remove(req, res) {
       console.error(e);
     }
 
+    let afterTotalCostPrice;
+    try {
+      afterTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+    } catch (e) {
+      console.error(e);
+      afterTotalCostPrice = null;
+    }
+
     await log(req).log({
       event_type: 'BOOKING_UPDATED',
       entity_type: 'booking',
       entity_id: bid,
       actor_id: req.user.id,
       actor_role: req.user.role,
-      before_state: { flight_removed: fid },
-      after_state: null,
-      metadata: { section: 'flights' },
+      before_state: { total_cost_price: beforeTotalCostPrice },
+      after_state: { total_cost_price: afterTotalCostPrice },
+      metadata: { section: 'flights', deactivated_flight_id: fid },
     });
 
     return res.status(204).send();

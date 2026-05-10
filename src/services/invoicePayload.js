@@ -35,10 +35,10 @@ async function buildInvoicePayload(bookingId) {
 
   const [{ data: flights }, { data: hotels }, { data: lands }, { data: visas }, { data: travellers }] =
     await Promise.all([
-      supabase.from('booking_flights').select('*').eq('booking_id', bookingId).order('sort_order'),
-      supabase.from('booking_hotels').select('*').eq('booking_id', bookingId).order('sort_order'),
-      supabase.from('booking_land_items').select('*').eq('booking_id', bookingId).order('sort_order'),
-      supabase.from('booking_visas').select('*').eq('booking_id', bookingId).order('sort_order'),
+      supabase.from('booking_flights').select('*').eq('booking_id', bookingId).eq('is_active', true).order('sort_order'),
+      supabase.from('booking_hotels').select('*').eq('booking_id', bookingId).eq('is_active', true).order('sort_order'),
+      supabase.from('booking_land_items').select('*').eq('booking_id', bookingId).eq('is_active', true).order('sort_order'),
+      supabase.from('booking_visas').select('*').eq('booking_id', bookingId).eq('is_active', true).order('sort_order'),
       supabase.from('booking_travellers').select('id, full_name').eq('booking_id', bookingId),
     ]);
 

@@ -1,7 +1,7 @@
 const { getSupabase } = require('../lib/supabase');
 const { createDocumentVersion } = require('../services/documentService');
 const { enrichDocumentsWithSignedUrls } = require('../lib/documentsStorage');
-const { hotelDerived, lineItemCount } = require('../utils/lineItemShared');
+const { hotelDerived, lineItemCount, fetchBookingTotalCostPrice } = require('../utils/lineItemShared');
 const {
   supabaseErrorMessage,
   omitFareRules,
@@ -50,6 +50,7 @@ async function list(req, res) {
     .from('booking_hotels')
     .select('*')
     .eq('booking_id', req.params.id)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true });
   if (error) {
     console.error(error);
@@ -66,7 +67,11 @@ async function create(req, res) {
     const cin = body.check_in_date != null ? String(body.check_in_date).slice(0, 10) : null;
     const cout = body.check_out_date != null ? String(body.check_out_date).slice(0, 10) : null;
     const derived = hotelDerived({ ...body, check_in_date: cin, check_out_date: cout });
-    const { count } = await supabase.from('booking_hotels').select('*', { count: 'exact', head: true }).eq('booking_id', bid);
+    const { count } = await supabase
+      .from('booking_hotels')
+      .select('*', { count: 'exact', head: true })
+      .eq('booking_id', bid)
+      .eq('is_active', true);
     /* fare_rules: column added in supabase/migrations/006_phase2_fare_rules.sql */
     const row = {
       booking_id: bid,
@@ -89,6 +94,7 @@ async function create(req, res) {
         body.supplier_partial_refund_till != null ? String(body.supplier_partial_refund_till).slice(0, 10) : null,
       fare_rules: body.fare_rules != null ? String(body.fare_rules) : null,
       sort_order: count ?? 0,
+      is_active: true,
       inr_equivalent: derived.inr_equivalent,
       our_full_refund_till: derived.our_full_refund_till,
       our_partial_refund_till: derived.our_partial_refund_till,
@@ -130,7 +136,13 @@ async function patch(req, res) {
     const supabase = getSupabase();
     const bid = req.params.id;
     const hid = req.params.hotelId;
-    const { data: existing, error: fe } = await supabase.from('booking_hotels').select('*').eq('id', hid).eq('booking_id', bid).maybeSingle();
+    const { data: existing, error: fe } = await supabase
+      .from('booking_hotels')
+      .select('*')
+      .eq('id', hid)
+      .eq('booking_id', bid)
+      .eq('is_active', true)
+      .maybeSingle();
     if (fe) {
       console.error(fe);
       return res.status(500).json({ error: supabaseErrorMessage(fe) });
@@ -201,26 +213,54 @@ async function remove(req, res) {
     if ((await lineItemCount(supabase, bid)) <= 1) {
       return res.status(400).json({ error: 'Cannot remove the only line item on the booking' });
     }
-    const { error } = await supabase.from('booking_hotels').delete().eq('id', hid).eq('booking_id', bid);
+
+    let beforeTotalCostPrice;
+    try {
+      beforeTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: supabaseErrorMessage(e) });
+    }
+
+    const { data: deactivated, error } = await supabase
+      .from('booking_hotels')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', hid)
+      .eq('booking_id', bid)
+      .eq('is_active', true)
+      .select('id');
     if (error) {
       console.error(error);
       return res.status(500).json({ error: supabaseErrorMessage(error) });
     }
+    if (!deactivated?.length) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
     try {
       const { runBookingRecalc } = require('../services/bookingRecalc');
       await runBookingRecalc(bid, { regenGuestTranches: true });
     } catch (e) {
       console.error(e);
     }
+
+    let afterTotalCostPrice;
+    try {
+      afterTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+    } catch (e) {
+      console.error(e);
+      afterTotalCostPrice = null;
+    }
+
     await log(req).log({
       event_type: 'BOOKING_UPDATED',
       entity_type: 'booking',
       entity_id: bid,
       actor_id: req.user.id,
       actor_role: req.user.role,
-      before_state: { hotel_removed: hid },
-      after_state: null,
-      metadata: { section: 'hotels' },
+      before_state: { total_cost_price: beforeTotalCostPrice },
+      after_state: { total_cost_price: afterTotalCostPrice },
+      metadata: { section: 'hotels', deactivated_hotel_id: hid },
     });
     return res.status(204).send();
   } catch (e) {

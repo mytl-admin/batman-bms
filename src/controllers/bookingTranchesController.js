@@ -10,6 +10,63 @@ function ceilRupee(x) {
   return Math.ceil(Number(x) || 0);
 }
 
+function toRateDecimal(v) {
+  if (v == null || v === '') return 1;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 1;
+}
+
+function collectSupplierLineItems(lineItems) {
+  const li = lineItems && typeof lineItems === 'object' ? lineItems : {};
+  const flights = Array.isArray(li.flights) ? li.flights.filter((f) => !f?.is_self_booked) : [];
+  const hotels = Array.isArray(li.hotels) ? li.hotels.filter((h) => !h?.is_self_booked) : [];
+  const landItems = Array.isArray(li.land_items) ? li.land_items : [];
+  const visas = Array.isArray(li.visas) ? li.visas.filter((v) => !v?.is_self_arranged) : [];
+  return [...flights, ...hotels, ...landItems, ...visas].filter((x) => x?.supplier_id);
+}
+
+function summarizeSupplierTotals(lineItems) {
+  const map = new Map();
+  for (const item of collectSupplierLineItems(lineItems)) {
+    const sid = String(item.supplier_id);
+    const inr = Number(item.inr_equivalent || 0);
+    const curr = item.currency != null && String(item.currency).trim() !== '' ? String(item.currency) : 'INR';
+    const rate = toRateDecimal(item.exchange_rate);
+    const name = item.supplier_name != null ? String(item.supplier_name) : null;
+    if (!map.has(sid)) {
+      map.set(sid, {
+        supplier_id: sid,
+        supplier_name: name,
+        total: 0,
+        currencies: new Set(),
+        rates: new Set(),
+      });
+    }
+    const g = map.get(sid);
+    g.total += inr;
+    g.currencies.add(curr);
+    g.rates.add(String(rate));
+    if (!g.supplier_name && name) g.supplier_name = name;
+  }
+  const out = [];
+  for (const g of map.values()) {
+    const total = ceilRupee(g.total);
+    const currency = g.currencies.size === 1 ? [...g.currencies][0] : 'INR';
+    const exchangeRate = g.rates.size === 1 ? Number([...g.rates][0]) : 1;
+    out.push({
+      supplier_id: g.supplier_id,
+      supplier_name: g.supplier_name,
+      amount: total,
+      currency,
+      exchange_rate: exchangeRate,
+      inr_equivalent: total,
+      payment_date: null,
+      line_item_total: total,
+    });
+  }
+  return out;
+}
+
 function assertPayBeforeTravel(paymentDate, dateOfTravel) {
   const pay = String(paymentDate).slice(0, 10);
   const dot = String(dateOfTravel).slice(0, 10);
@@ -32,6 +89,15 @@ async function listSupplier(req, res) {
     return res.status(500).json({ error: 'Failed to list supplier tranches' });
   }
   return res.json(data || []);
+}
+
+async function generateSupplierTranches(req, res) {
+  const body = req.body || {};
+  const lineItems = body.line_items;
+  if (!lineItems || typeof lineItems !== 'object') {
+    return res.status(400).json({ error: 'line_items object is required' });
+  }
+  return res.json({ supplier_tranches: summarizeSupplierTotals(lineItems) });
 }
 
 async function createSupplier(req, res) {
@@ -335,6 +401,7 @@ async function linkGuestToSupplier(req, res) {
 }
 
 module.exports = {
+  generateSupplierTranches,
   listSupplier,
   createSupplier,
   patchSupplier,

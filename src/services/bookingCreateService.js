@@ -61,6 +61,13 @@ function travellerIsPrimaryBulk(t, index) {
   return index === 0;
 }
 
+/** Same primary rule as bulk insert loop — used to seed bookings.lead_pax_* on parent row. */
+function primaryTravellerFromPayload(travellers) {
+  const idx = travellers.findIndex((t, i) => travellerIsPrimaryBulk(t, i));
+  const i = idx >= 0 ? idx : 0;
+  return travellers[i];
+}
+
 function contactColumnValue(v, primary) {
   if (primary) {
     return String(v).trim();
@@ -69,6 +76,76 @@ function contactColumnValue(v, primary) {
     return null;
   }
   return String(v).trim();
+}
+
+function collectSupplierLineItems(payload) {
+  const flights = Array.isArray(payload.flights) ? payload.flights.filter((f) => !f?.is_self_booked) : [];
+  const hotels = Array.isArray(payload.hotels) ? payload.hotels.filter((h) => !h?.is_self_booked) : [];
+  const landItems = Array.isArray(payload.land_items) ? payload.land_items : [];
+  const visas = Array.isArray(payload.visas) ? payload.visas.filter((v) => !v?.is_self_arranged) : [];
+  return [...flights, ...hotels, ...landItems, ...visas].filter((x) => x?.supplier_id);
+}
+
+function summarizeSupplierLineItemTotals(payload) {
+  const map = new Map();
+  for (const item of collectSupplierLineItems(payload)) {
+    const sid = String(item.supplier_id);
+    const inr = Number(item.inr_equivalent);
+    const total = Number.isFinite(inr)
+      ? inr
+      : ceilRupee(Number(item.cost || item.total_cost || item.cost_per_applicant || 0) * Number(item.exchange_rate || 1));
+    const curr = item.currency != null && String(item.currency).trim() !== '' ? String(item.currency) : 'INR';
+    const rate = item.exchange_rate != null ? Number(item.exchange_rate) : 1;
+    const name = item.supplier_name != null ? String(item.supplier_name) : sid;
+    if (!map.has(sid)) {
+      map.set(sid, { supplier_name: name, total: 0 });
+    }
+    const row = map.get(sid);
+    row.total += total;
+    if (!row.supplier_name && name) row.supplier_name = name;
+    row.currency = row.currency || curr;
+    row.exchange_rate = row.exchange_rate || rate;
+  }
+  const out = new Map();
+  for (const [sid, row] of map.entries()) {
+    out.set(sid, { supplier_name: row.supplier_name, total: Math.ceil(row.total) });
+  }
+  return out;
+}
+
+function validateSupplierTrancheTotals(payload) {
+  const expected = summarizeSupplierLineItemTotals(payload);
+  const grouped = new Map();
+  for (const st of payload.supplier_tranches || []) {
+    const sid = st.supplier_id != null ? String(st.supplier_id) : '';
+    if (!sid) continue;
+    if (!grouped.has(sid)) {
+      grouped.set(sid, { sum: 0, lineItemTotal: null });
+    }
+    const g = grouped.get(sid);
+    g.sum += Number(st.amount || 0);
+    if (st.line_item_total != null) {
+      const lit = Number(st.line_item_total);
+      if (g.lineItemTotal == null) g.lineItemTotal = lit;
+      else if (Math.abs(g.lineItemTotal - lit) > 1) {
+        throw bad(`supplier_tranches for supplier ${sid} contain inconsistent line_item_total values`);
+      }
+    }
+  }
+  for (const [sid, exp] of expected.entries()) {
+    const g = grouped.get(sid);
+    const trancheSum = g ? Math.ceil(g.sum) : 0;
+    if (Math.abs(trancheSum - exp.total) > 1) {
+      throw bad(
+        `Supplier tranche total for ${exp.supplier_name} (INR ${trancheSum}) does not match line item total (INR ${exp.total})`,
+      );
+    }
+    if (g && g.lineItemTotal != null && Math.abs(g.lineItemTotal - exp.total) > 1) {
+      throw bad(
+        `line_item_total for supplier ${exp.supplier_name} (INR ${g.lineItemTotal}) does not match computed line item total (INR ${exp.total})`,
+      );
+    }
+  }
 }
 
 function validateAndNormalizeBody(body) {
@@ -265,6 +342,7 @@ function newPgClient() {
  */
 async function createBookingFromPayload(body, user, logService) {
   const payload = validateAndNormalizeBody(body);
+  validateSupplierTrancheTotals(payload);
   const isNrf = daysUntilTravel(payload.date_of_travel) <= 20;
   const agesParam = payload.children > 0 ? payload.children_ages : null;
 
@@ -279,18 +357,25 @@ async function createBookingFromPayload(body, user, logService) {
     const bookingCode = await allocateBookingCodePg(client);
     const invoiceNumber = await allocateInvoiceNumberPg(client);
 
+    const primaryT = primaryTravellerFromPayload(payload.travellers);
+    const leadPaxPhone = contactColumnValue(primaryT.phone, true);
+    const leadPaxFullName = String(primaryT.full_name).trim();
+    const travellerCountSeed = payload.travellers.length;
+
     const { rows: insRows } = await client.query(
       `INSERT INTO bookings (
         booking_code, invoice_number, crm_lead_id, customer_name, destination,
         date_of_travel, return_date, adults, children, children_ages,
         status, is_nrf, case_owner_id, margin,
         financial_confirmed, financial_confirmed_by, financial_confirmed_at,
-        created_by
+        created_by,
+        lead_pax_phone, lead_pax_full_name, traveller_count
       ) VALUES (
         $1, $2, $3, $4, $5::text[],
         $6::date, $7::date, $8, $9, $10::int[],
         'active', $11, $12, $13,
-        true, $12, now(), $12
+        true, $12, now(), $12,
+        $14, $15, $16
       ) RETURNING id`,
       [
         bookingCode,
@@ -306,6 +391,9 @@ async function createBookingFromPayload(body, user, logService) {
         isNrf,
         user.id,
         payload.margin,
+        leadPaxPhone,
+        leadPaxFullName,
+        travellerCountSeed,
       ],
     );
 
@@ -406,10 +494,10 @@ async function createBookingFromPayload(body, user, logService) {
           booking_id, is_self_booked, sector_from, sector_to, supplier_id, travel_date, departure_time,
           cabin_class, baggage_allowance, cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
-          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, fare_rules, sort_order
+          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, fare_rules, sort_order, is_active
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date, $7::time, $8, $9, $10, COALESCE($11, 'INR'), COALESCE($12, 1), $13,
-          $14, $15::date, $16::date, $17, $18::date, $19::date, $20, $21
+          $14, $15::date, $16::date, $17, $18::date, $19::date, $20, $21, true
         )`,
           flightParams,
         );
@@ -426,10 +514,10 @@ async function createBookingFromPayload(body, user, logService) {
           booking_id, is_self_booked, sector_from, sector_to, supplier_id, travel_date, departure_time,
           cabin_class, baggage_allowance, cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
-          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order
+          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order, is_active
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date, $7::time, $8, $9, $10, COALESCE($11, 'INR'), COALESCE($12, 1), $13,
-          $14, $15::date, $16::date, $17, $18::date, $19::date, $20
+          $14, $15::date, $16::date, $17, $18::date, $19::date, $20, true
         )`,
           noFrParams,
         );
@@ -485,11 +573,11 @@ async function createBookingFromPayload(body, user, logService) {
           check_in_date, check_out_date, nights, room_type, meal_plan,
           cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
-          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, fare_rules, sort_order
+          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, fare_rules, sort_order, is_active
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date, $7::date, $8, $9, $10,
           $11, COALESCE($12, 'INR'), COALESCE($13, 1), $14,
-          $15, $16::date, $17::date, $18, $19::date, $20::date, $21, $22
+          $15, $16::date, $17::date, $18, $19::date, $20::date, $21, $22, true
         )`,
           hotelParams,
         );
@@ -507,11 +595,11 @@ async function createBookingFromPayload(body, user, logService) {
           check_in_date, check_out_date, nights, room_type, meal_plan,
           cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
-          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order
+          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order, is_active
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date, $7::date, $8, $9, $10,
           $11, COALESCE($12, 'INR'), COALESCE($13, 1), $14,
-          $15, $16::date, $17::date, $18, $19::date, $20::date, $21
+          $15, $16::date, $17::date, $18, $19::date, $20::date, $21, true
         )`,
           noFrParams,
         );
@@ -538,11 +626,11 @@ async function createBookingFromPayload(body, user, logService) {
           booking_id, sub_item_type, description, supplier_id, transfer_type, date,
           cost, currency, exchange_rate_decimal, inr_equivalent,
           is_refundable, supplier_full_refund_till, our_full_refund_till,
-          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order
+          partial_refund_pct, supplier_partial_refund_till, our_partial_refund_till, sort_order, is_active
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date,
           $7, COALESCE($8, 'INR'), COALESCE($9, 1), $10,
-          $11, $12::date, $13::date, $14, $15::date, $16::date, $17
+          $11, $12::date, $13::date, $14, $15::date, $16::date, $17, true
         )`,
         [
           bookingId,
@@ -588,10 +676,10 @@ async function createBookingFromPayload(body, user, logService) {
           booking_id, is_self_arranged, country, visa_type, supplier_id,
           cost_per_applicant, number_of_applicants, total_cost,
           currency, exchange_rate_decimal, inr_equivalent,
-          is_refundable, supplier_full_refund_till, our_full_refund_till, sort_order
+          is_refundable, supplier_full_refund_till, our_full_refund_till, sort_order, is_active
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'INR'), COALESCE($10, 1), $11,
-          $12, $13::date, $14::date, $15
+          $12, $13::date, $14::date, $15, true
         ) RETURNING id`,
         [
           bookingId,

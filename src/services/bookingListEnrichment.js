@@ -5,17 +5,24 @@ function todayYmdUtc() {
   return n.toISOString().slice(0, 10);
 }
 
-async function enrichBookingRow(row) {
+async function enrichBookingRow(row, opts = {}) {
+  const timingSampleFirstRow = opts.timingSampleFirstRow === true;
   const supabase = getSupabase();
   const bid = row.id;
   const t = todayYmdUtc();
 
+  if (timingSampleFirstRow) {
+    console.time('enrichBookingRow parallel4');
+  }
   const [{ data: guests }, { data: suppliers }, { data: docs }, { data: travs }] = await Promise.all([
     supabase.from('guest_tranches').select('id, amount, due_date, status').eq('booking_id', bid),
     supabase.from('supplier_tranches').select('id, payment_date, status, amount').eq('booking_id', bid),
     supabase.from('booking_documents').select('id, entity_type, entity_id, is_active').eq('booking_id', bid).eq('is_active', true),
     supabase.from('booking_travellers').select('id').eq('booking_id', bid),
   ]);
+  if (timingSampleFirstRow) {
+    console.timeEnd('enrichBookingRow parallel4');
+  }
 
   const guestList = guests || [];
   const overdue = guestList.some(
@@ -74,7 +81,13 @@ async function enrichBookingRow(row) {
 
   let case_owner_name = null;
   if (row.case_owner_id) {
+    if (timingSampleFirstRow) {
+      console.time('enrichBookingRow case_owner');
+    }
     const { data: u } = await supabase.from('users').select('name').eq('id', row.case_owner_id).maybeSingle();
+    if (timingSampleFirstRow) {
+      console.timeEnd('enrichBookingRow case_owner');
+    }
     case_owner_name = u?.name || null;
   }
 
@@ -107,9 +120,12 @@ function matchesDerivedListFilters(enrichedRow, { payment_status: paymentStatus,
 }
 
 async function enrichBookingListRows(rows) {
+  const LT = process.env.LIST_TIMING === '1';
   const out = [];
+  let i = 0;
   for (const r of rows) {
-    out.push(await enrichBookingRow(r));
+    out.push(await enrichBookingRow(r, { timingSampleFirstRow: LT && i === 0 }));
+    i += 1;
   }
   return out;
 }

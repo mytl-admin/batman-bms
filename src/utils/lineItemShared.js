@@ -106,13 +106,28 @@ function visaDerived(body) {
 async function lineItemCount(supabase, bookingId) {
   let total = 0;
   for (const table of ['booking_flights', 'booking_hotels', 'booking_land_items', 'booking_visas']) {
-    const { count, error } = await supabase.from(table).select('*', { count: 'exact', head: true }).eq('booking_id', bookingId);
+    const { count, error } = await supabase
+      .from(table)
+      .select('*', { count: 'exact', head: true })
+      .eq('booking_id', bookingId)
+      .eq('is_active', true);
     if (error) {
       throw error;
     }
     total += count || 0;
   }
   return total;
+}
+
+async function fetchBookingTotalCostPrice(supabase, bookingId) {
+  const { data, error } = await supabase.from('bookings').select('total_cost_price').eq('id', bookingId).maybeSingle();
+  if (error) {
+    throw error;
+  }
+  if (!data || data.total_cost_price == null) {
+    return null;
+  }
+  return Number(data.total_cost_price);
 }
 
 async function refreshVisaApplicantTotals(supabase, visaId) {
@@ -145,5 +160,6 @@ module.exports = {
   landDerived,
   visaDerived,
   lineItemCount,
+  fetchBookingTotalCostPrice,
   refreshVisaApplicantTotals,
 };

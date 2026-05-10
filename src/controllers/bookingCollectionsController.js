@@ -30,23 +30,25 @@ function todayUtcYmd() {
 }
 
 /**
- * P2-COLLECTIONS-FIX — read-only preview of guest collection tranches (no DB writes).
+ * P2-COLLECTIONS-FIX / P2-MARGIN-COLLECTIONS-FIX — read-only preview of guest collection tranches (no DB writes).
+ * Invoice totals drive tranche split: Scenario A balance = total_payable − tranche1 (always sums to total_payable).
  */
 async function previewCollections(req, res) {
   const body = req.body || {};
-  const { date_of_travel: dateOfTravel, margin, supplier_tranches: supplierTranchesIn, line_items: lineItemsIn } = body;
+  const { date_of_travel: dotRaw, margin: marginRaw, supplier_tranches: supplierTranchesRaw, line_items: lineItemsIn } =
+    body;
 
+  let dateOfTravel = dotRaw;
   if (!dateOfTravel || String(dateOfTravel).trim() === '') {
-    return res.status(400).json({ error: 'date_of_travel is required' });
-  }
-  if (margin === undefined || margin === null || Number.isNaN(Number(margin))) {
-    return res.status(400).json({ error: 'margin is required' });
-  }
-  if (!Array.isArray(supplierTranchesIn)) {
-    return res.status(400).json({ error: 'supplier_tranches array is required' });
+    dateOfTravel = todayUtcYmd();
   }
 
-  const marginNum = Number(margin);
+  const marginNum =
+    marginRaw === undefined || marginRaw === null || marginRaw === '' || Number.isNaN(Number(marginRaw))
+      ? 0
+      : Number(marginRaw);
+
+  const supplierTranchesIn = Array.isArray(supplierTranchesRaw) ? supplierTranchesRaw : [];
   const li = lineItemsIn && typeof lineItemsIn === 'object' ? lineItemsIn : {};
   const flights = Array.isArray(li.flights) ? li.flights : [];
   const hotels = Array.isArray(li.hotels) ? li.hotels : [];
@@ -82,13 +84,14 @@ async function previewCollections(req, res) {
   let collections;
   let scenario;
   if (!is_nrf) {
-    const booked_flights_hotels = ceilRupee(
+    const flightHotelRaw =
       flights.filter((f) => !f.is_self_booked).reduce((s, f) => s + (Number(f.inr_equivalent) || 0), 0) +
-        hotels.filter((h) => !h.is_self_booked).reduce((s, h) => s + (Number(h.inr_equivalent) || 0), 0),
-    );
-    const tranche1_amount = ceilRupee(booked_flights_hotels + marginNum);
-    let balance_amount = ceilRupee(total_payable - tranche1_amount);
+      hotels.filter((h) => !h.is_self_booked).reduce((s, h) => s + (Number(h.inr_equivalent) || 0), 0);
+    const booked_flights_hotels = ceilRupee(flightHotelRaw);
+    let tranche1_amount = ceilRupee(booked_flights_hotels + marginNum);
+    let balance_amount = Math.ceil(total_payable - tranche1_amount);
     if (balance_amount < 0) {
+      tranche1_amount = total_payable;
       balance_amount = 0;
     }
 
@@ -102,6 +105,19 @@ async function previewCollections(req, res) {
       { label: 'Balance Payment', amount: balance_amount, due_date: balance_due },
     ];
     scenario = 'A';
+
+    if (process.env.PREVIEW_COLLECTIONS_DEBUG === '1') {
+      const sum = tranche1_amount + balance_amount;
+      /* eslint-disable no-console */
+      console.log('Tranche check:', {
+        tranche1_amount,
+        balance_amount,
+        total_payable,
+        sum,
+        matches: sum === total_payable,
+      });
+      /* eslint-enable no-console */
+    }
   } else {
     collections = [{ label: 'Full Payment', amount: total_payable, due_date: todayStr }];
     scenario = 'B';

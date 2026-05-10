@@ -44,10 +44,19 @@ async function loadGuestSupplierLinks(supabase, row) {
   return data || [];
 }
 
+function filterInactiveLineItems(row) {
+  for (const key of ['booking_flights', 'booking_hotels', 'booking_land_items', 'booking_visas']) {
+    if (Array.isArray(row[key])) {
+      row[key] = row[key].filter((item) => item && item.is_active !== false);
+    }
+  }
+}
+
 /**
  * P2-12 — full case-file extras: visa applicants, tranche links, invoice, alerts.
  */
 async function hydrateBookingDetail(supabase, row) {
+  filterInactiveLineItems(row);
   await mergeVisaApplicants(supabase, row);
   if (Array.isArray(row.booking_documents) && row.booking_documents.length > 0) {
     row.booking_documents = await enrichDocumentsWithSignedUrls(row.booking_documents);

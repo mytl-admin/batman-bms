@@ -12,8 +12,20 @@ function getLogService(req) {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const LIST_SELECT =
-  'id, booking_code, invoice_number, customer_name, status, date_of_travel, return_date, destination, is_nrf, case_owner_id, case_manager_id, total_payable, adults, children';
+/** Default list: single round-trip, no per-row enrichment (see enrichBookingListRows). */
+const LIST_SELECT_SLIM =
+  'id, booking_code, lead_pax_full_name, lead_pax_phone, destination, traveller_count, date_of_travel, created_at, is_nrf, status';
+
+/** When payment_status / doc_status filters require derived fields from enrichment. */
+const LIST_SELECT_WITH_DERIVED_ENRICHMENT =
+  `${LIST_SELECT_SLIM}, invoice_number, customer_name, return_date, case_owner_id, case_manager_id, total_payable, adults, children`;
+
+function shapeBookingListRow(row) {
+  if (!row || typeof row !== 'object') {
+    return row;
+  }
+  return row;
+}
 
 const DETAIL_SELECT = `
   *,
@@ -39,7 +51,13 @@ function escapeOrToken(s) {
   return String(s).trim().replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/,/g, '\\,');
 }
 
-function buildBookingListQuery(supabase, req, countMode) {
+/** Set LIST_TIMING=1 for GET /api/bookings diagnostic console.time logs (dev only). */
+function listTimingOn() {
+  return process.env.LIST_TIMING === '1';
+}
+
+function buildBookingListQuery(supabase, req, countMode, listSelect) {
+  const selectCols = listSelect || LIST_SELECT_SLIM;
   const {
     status,
     destination,
@@ -52,10 +70,13 @@ function buildBookingListQuery(supabase, req, countMode) {
 
   let q =
     countMode === 'exact'
-      ? supabase.from('bookings').select(LIST_SELECT, { count: 'exact' })
-      : supabase.from('bookings').select(LIST_SELECT);
+      ? supabase.from('bookings').select(selectCols, { count: 'exact' })
+      : supabase.from('bookings').select(selectCols);
 
-  q = q.order('date_of_travel', { ascending: false });
+  const sortAscending = String(req.query.sort_dir || '')
+    .toLowerCase()
+    .trim() === 'asc';
+  q = q.order('created_at', { ascending: sortAscending });
 
   if (req.user.role === 'agent') {
     const orFilter = bookingsAgentOrFilter(req.user.id);
@@ -105,6 +126,9 @@ async function applySearchOr(supabase, q, searchRaw) {
   const raw = String(searchRaw).trim();
   const p = `%${escapeOrToken(raw)}%`;
   let destIds = [];
+  if (listTimingOn()) {
+    console.time('GET /api/bookings applySearchOr.rpc');
+  }
   try {
     const { data, error } = await supabase.rpc('booking_ids_destination_search', {
       p_term: raw,
@@ -117,8 +141,17 @@ async function applySearchOr(supabase, q, searchRaw) {
     }
   } catch {
     /* migration not applied yet */
+  } finally {
+    if (listTimingOn()) {
+      console.timeEnd('GET /api/bookings applySearchOr.rpc');
+    }
   }
-  const orParts = [`customer_name.ilike.${p}`, `booking_code.ilike.${p}`];
+  const orParts = [
+    `customer_name.ilike.${p}`,
+    `booking_code.ilike.${p}`,
+    `lead_pax_full_name.ilike.${p}`,
+    `lead_pax_phone.ilike.${p}`,
+  ];
   if (destIds.length > 0) {
     orParts.push(`id.in.(${destIds.join(',')})`);
   }
@@ -126,6 +159,10 @@ async function applySearchOr(supabase, q, searchRaw) {
 }
 
 async function list(req, res) {
+  const LT = listTimingOn();
+  if (LT) {
+    console.time('GET /api/bookings total');
+  }
   try {
     const supabase = getSupabase();
     const { limit, offset } = parseLimitOffset(req.query);
@@ -135,19 +172,51 @@ async function list(req, res) {
       (paymentStatus != null && String(paymentStatus).trim() !== '') ||
       (docStatus != null && String(docStatus).trim() !== '');
 
+    if (LT) {
+      /* eslint-disable-next-line no-console */
+      console.log('[LIST_TIMING]', {
+        limit,
+        offset,
+        needsDerived,
+        hasSearch: Boolean(req.query.search && String(req.query.search).trim()),
+      });
+    }
+
     if (!needsDerived) {
-      let q = buildBookingListQuery(supabase, req, 'exact');
+      let q = buildBookingListQuery(supabase, req, 'exact', LIST_SELECT_SLIM);
+      if (LT) {
+        console.time('GET /api/bookings applySearchOr');
+      }
       ({ query: q } = await applySearchOr(supabase, q, req.query.search));
+      if (LT) {
+        console.timeEnd('GET /api/bookings applySearchOr');
+      }
+
       q = q.range(offset, offset + limit - 1);
+      if (LT) {
+        console.time('GET /api/bookings supabase.query');
+      }
       const { data, error, count } = await q;
+      if (LT) {
+        console.timeEnd('GET /api/bookings supabase.query');
+      }
       if (error) {
         /* eslint-disable-next-line no-console */
         console.error(error);
         return res.status(500).json({ error: 'Failed to list bookings' });
       }
-      const enriched = await enrichBookingListRows(data || []);
+      const rowCount = (data || []).length;
+      if (LT) {
+        console.time('GET /api/bookings shapeBookingListRow');
+      }
+      const shaped = (data || []).map(shapeBookingListRow);
+      if (LT) {
+        console.timeEnd('GET /api/bookings shapeBookingListRow');
+        /* eslint-disable-next-line no-console */
+        console.log('[LIST_TIMING] slim list rows', rowCount);
+      }
       return res.json({
-        data: enriched,
+        data: shaped,
         count: count ?? (data || []).length,
         limit,
         offset,
@@ -160,12 +229,26 @@ async function list(req, res) {
     const page = [];
     let dbOffset = 0;
     let scanned = 0;
+    let chunkIdx = 0;
 
     while (page.length < limit && scanned < MAX_SCAN) {
-      let bq = buildBookingListQuery(supabase, req, null);
+      let bq = buildBookingListQuery(supabase, req, null, LIST_SELECT_WITH_DERIVED_ENRICHMENT);
+      if (LT) {
+        console.time(`GET /api/bookings chunk.${chunkIdx}.applySearchOr`);
+      }
       ({ query: bq } = await applySearchOr(supabase, bq, req.query.search));
+      if (LT) {
+        console.timeEnd(`GET /api/bookings chunk.${chunkIdx}.applySearchOr`);
+      }
+
       bq = bq.range(dbOffset, dbOffset + CHUNK - 1);
+      if (LT) {
+        console.time(`GET /api/bookings chunk.${chunkIdx}.supabaseQuery`);
+      }
       const { data: batch, error } = await bq;
+      if (LT) {
+        console.timeEnd(`GET /api/bookings chunk.${chunkIdx}.supabaseQuery`);
+      }
       if (error) {
         console.error(error);
         return res.status(500).json({ error: 'Failed to list bookings' });
@@ -175,7 +258,16 @@ async function list(req, res) {
       }
       scanned += batch.length;
       dbOffset += CHUNK;
+      if (LT) {
+        console.time(`GET /api/bookings chunk.${chunkIdx}.enrichBookingListRows`);
+      }
       const enriched = await enrichBookingListRows(batch);
+      if (LT) {
+        console.timeEnd(`GET /api/bookings chunk.${chunkIdx}.enrichBookingListRows`);
+        /* eslint-disable-next-line no-console */
+        console.log('[LIST_TIMING] chunk', { chunkIdx, batchLen: batch?.length, scanned });
+      }
+      chunkIdx += 1;
       for (const row of enriched) {
         if (!matchesDerivedListFilters(row, { payment_status: paymentStatus, doc_status: docStatus })) {
           continue;
@@ -185,7 +277,7 @@ async function list(req, res) {
           continue;
         }
         if (page.length < limit) {
-          page.push(row);
+          page.push(shapeBookingListRow(row));
         }
         if (page.length >= limit) {
           break;
@@ -213,6 +305,10 @@ async function list(req, res) {
     }
     console.error(e);
     return res.status(500).json({ error: 'Failed to list bookings' });
+  } finally {
+    if (LT) {
+      console.timeEnd('GET /api/bookings total');
+    }
   }
 }
 

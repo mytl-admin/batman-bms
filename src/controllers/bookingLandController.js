@@ -1,5 +1,5 @@
 const { getSupabase } = require('../lib/supabase');
-const { landDerived, lineItemCount } = require('../utils/lineItemShared');
+const { landDerived, lineItemCount, fetchBookingTotalCostPrice } = require('../utils/lineItemShared');
 
 function log(req) {
   return req.app.locals.logService;
@@ -44,6 +44,7 @@ async function list(req, res) {
     .from('booking_land_items')
     .select('*')
     .eq('booking_id', req.params.id)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true });
   if (error) {
     console.error(error);
@@ -64,7 +65,11 @@ async function create(req, res) {
     return res.status(400).json({ error: 'invalid sub_item_type' });
   }
   const derived = landDerived({ ...body });
-  const { count } = await supabase.from('booking_land_items').select('*', { count: 'exact', head: true }).eq('booking_id', bid);
+  const { count } = await supabase
+    .from('booking_land_items')
+    .select('*', { count: 'exact', head: true })
+    .eq('booking_id', bid)
+    .eq('is_active', true);
   const row = {
     booking_id: bid,
     sub_item_type: body.sub_item_type,
@@ -81,6 +86,7 @@ async function create(req, res) {
     supplier_partial_refund_till:
       body.supplier_partial_refund_till != null ? String(body.supplier_partial_refund_till).slice(0, 10) : null,
     sort_order: body.sort_order != null ? Number(body.sort_order) : count || 0,
+    is_active: true,
     ...derived,
   };
 
@@ -115,7 +121,13 @@ async function patch(req, res) {
   const supabase = getSupabase();
   const bid = req.params.id;
   const iid = req.params.itemId;
-  const { data: existing, error: fe } = await supabase.from('booking_land_items').select('*').eq('id', iid).eq('booking_id', bid).maybeSingle();
+  const { data: existing, error: fe } = await supabase
+    .from('booking_land_items')
+    .select('*')
+    .eq('id', iid)
+    .eq('booking_id', bid)
+    .eq('is_active', true)
+    .maybeSingle();
   if (fe || !existing) {
     return res.status(404).json({ error: 'Not found' });
   }
@@ -169,26 +181,54 @@ async function remove(req, res) {
   if ((await lineItemCount(supabase, bid)) <= 1) {
     return res.status(400).json({ error: 'Cannot remove the only line item on the booking' });
   }
-  const { error } = await supabase.from('booking_land_items').delete().eq('id', iid).eq('booking_id', bid);
+
+  let beforeTotalCostPrice;
+  try {
+    beforeTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+
+  const { data: deactivated, error } = await supabase
+    .from('booking_land_items')
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq('id', iid)
+    .eq('booking_id', bid)
+    .eq('is_active', true)
+    .select('id');
   if (error) {
     console.error(error);
-    return res.status(500).json({ error: 'Failed to delete land item' });
+    return res.status(500).json({ error: 'Failed to deactivate land item' });
   }
+  if (!deactivated?.length) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
   try {
     const { runBookingRecalc } = require('../services/bookingRecalc');
     await runBookingRecalc(bid, { regenGuestTranches: true });
   } catch (e) {
     console.error(e);
   }
+
+  let afterTotalCostPrice;
+  try {
+    afterTotalCostPrice = await fetchBookingTotalCostPrice(supabase, bid);
+  } catch (e) {
+    console.error(e);
+    afterTotalCostPrice = null;
+  }
+
   await log(req).log({
     event_type: 'BOOKING_UPDATED',
     entity_type: 'booking',
     entity_id: bid,
     actor_id: req.user.id,
     actor_role: req.user.role,
-    before_state: { land_removed: iid },
-    after_state: null,
-    metadata: { section: 'land' },
+    before_state: { total_cost_price: beforeTotalCostPrice },
+    after_state: { total_cost_price: afterTotalCostPrice },
+    metadata: { section: 'land', deactivated_land_item_id: iid },
   });
   return res.status(204).send();
 }

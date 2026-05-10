@@ -295,7 +295,7 @@ function buildPayload({ dot, ret, supId, margin = 5000, customerName = 'Test Cus
     supplier_tranches: [
       {
         supplier_id: supId,
-        amount: 80000,
+        amount: 10000,
         currency: 'INR',
         exchange_rate: 1,
         payment_date: addDays(dot, -14),

@@ -26,6 +26,7 @@ const upload = multer({
 router.get('/', bookings.list);
 router.post('/', bookings.create);
 router.post('/preview-collections', collections.previewCollections);
+router.post('/generate-supplier-tranches', tranches.generateSupplierTranches);
 
 const byId = Router({ mergeParams: true });
 byId.use(requireBookingAccess);
